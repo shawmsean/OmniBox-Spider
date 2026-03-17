@@ -1,9 +1,16 @@
+// @name iKanBot
+// @author 
+// @description 刮削：支持，弹幕：支持，嗅探：支持
+// @dependencies: axios, cheerio
+// @version 1.0.0
+// @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/iKanBot.js
+
+
 /**
  * ============================================================================
  * iKanBot资源 - OmniBox 爬虫脚本
  * ============================================================================
  */
-// @version 1.0.1
 const axios = require("axios");
 const cheerio = require("cheerio");
 const http = require("http");
@@ -59,37 +66,62 @@ const decodeMeta = (str) => {
 /**
  * 图像地址修复 - 保留原版复杂逻辑
  */
-const fixImageUrl = (url) => {
-    if (!url) return '';
-    
-    let finalUrl = '';
-    
-    // 1. 标准化 URL
-    if (url.startsWith('http')) {
-        finalUrl = url;
-    } else if (url.startsWith('//')) {
-        finalUrl = 'https:' + url;
-    } else if (url.startsWith('/')) {
-        finalUrl = ikanbotConfig.host + url;
+const fixImageUrl = (imageUrl, baseURL = "", referer = "") => {
+    if (!imageUrl) return '';
+
+    let url = '';
+
+    if (imageUrl.startsWith('http')) {
+        url = imageUrl;
+    } else if (imageUrl.startsWith('//')) {
+        url = 'https:' + imageUrl;
+    } else if (imageUrl.startsWith('/')) {
+        url = ikanbotConfig.host + imageUrl;
     } else {
-        finalUrl = ikanbotConfig.host + '/' + url.replace(/^\.?\//, '');
+        url = ikanbotConfig.host + '/' + imageUrl.replace(/^\.?\//, '');
     }
-    
-    const ua = ikanbotConfig.headers["User-Agent"];
-    
-    // 2. 根据域名分类处理 Header
-    // 情况 A: 豆瓣图片
-    if (finalUrl.includes('doubanio.com')) {
-        return finalUrl + "@Referer=https://movie.douban.com" + "@User-Agent=" + ua;
+
+    const isExternalUrl = !url.includes(ikanbotConfig.host) && url.startsWith('http');
+    const isDouban = url.includes('doubanio.com');
+
+    if (isDouban) {
+        try {
+            const finalReferer = referer || 'https://movie.douban.com';
+            const urlWithHeaders = `${url}@Referer=${finalReferer}`;
+            const encodedUrl = encodeURIComponent(urlWithHeaders);
+            const proxyUrl = `${baseURL}/api/proxy/image?url=${encodedUrl}`;
+            // logInfo("图片分组: 豆瓣代理", { input: imageUrl, finalUrl: url, referer: finalReferer, result: proxyUrl });
+            return proxyUrl;
+        } catch (error) {
+            logError("处理豆瓣图片失败", error);
+            return url;
+        }
     }
-    
-    // 情况 B: iKanBot 本站图片
-    if (finalUrl.includes('aikanbot.com')) {
-        return finalUrl + "@Referer=" + ikanbotConfig.host + "@User-Agent=" + ua;
+
+    if (isExternalUrl) {
+        try {
+            let finalReferer = referer;
+            if (!finalReferer) {
+                try {
+                    const urlObj = new URL(url);
+                    finalReferer = `${urlObj.protocol}//${urlObj.host}`;
+                } catch {
+                    finalReferer = ikanbotConfig.host;
+                }
+            }
+            const urlWithHeaders = `${url}@Referer=${finalReferer}`;
+            const encodedUrl = encodeURIComponent(urlWithHeaders);
+            const proxyUrl = `${baseURL}/api/proxy/image?url=${encodedUrl}`;
+            // logInfo("图片分组: 外部代理", { input: imageUrl, finalUrl: url, referer: finalReferer, result: proxyUrl });
+            return proxyUrl;
+        } catch (error) {
+            logError("处理图片 URL 失败", error);
+            return url;
+        }
     }
-    
-    // 情况 C: 其他第三方图片
-    return finalUrl + "@User-Agent=" + ua;
+
+    // logInfo("图片分组: 直连", { input: imageUrl, finalUrl: url, result: url });
+    return url;
 };
 
 // ========== 弹幕工具函数 ==========
@@ -274,7 +306,7 @@ const extractToken = ($) => {
  * 解析播放源 - 适配 OmniBox 格式
  */
 const parsePlaySourcesFromIkan = (playFrom, playList, vodName = '', videoId = '') => {
-    logInfo("开始解析iKanBot播放源", { from: playFrom, list: playList });
+    // logInfo("开始解析iKanBot播放源", { from: playFrom, list: playList });
     
     const playSources = [];
     if (!playFrom || !playList) return playSources;
@@ -307,7 +339,7 @@ const parsePlaySourcesFromIkan = (playFrom, playList, vodName = '', videoId = ''
         }
     }
     
-    logInfo("播放源解析结果", playSources);
+    // logInfo("播放源解析结果", playSources);
     return playSources;
 };
 
@@ -320,6 +352,7 @@ async function home(params) {
     logInfo("进入首页");
     
     try {
+        const baseURL = params?.context?.baseURL || params?.baseURL || "";
         // 获取分类
         const classes = [];
         
@@ -360,7 +393,7 @@ async function home(params) {
                 list.push({
                     vod_id: $(item).attr('href'),
                     vod_name: img.attr('alt') || $(item).find('.title').text() || '未知标题',
-                    vod_pic: fixImageUrl(imgSrc),
+                    vod_pic: fixImageUrl(imgSrc, baseURL),
                     vod_remarks: $(item).find('.label').text() || ''
                 });
             });
@@ -382,6 +415,7 @@ async function home(params) {
 async function category(params) {
     const { categoryId, page } = params;
     const pg = parseInt(page) || 1;
+    const baseURL = params?.context?.baseURL || params?.baseURL || "";
     
     logInfo(`请求分类: ${categoryId}, 页码: ${pg}`);
     
@@ -404,7 +438,7 @@ async function category(params) {
             list.push({
                 vod_id: $(item).attr('href'),
                 vod_name: img.attr('alt') || $(item).text().trim(),
-                vod_pic: fixImageUrl(imgSrc),
+                vod_pic: fixImageUrl(imgSrc, baseURL),
                 vod_remarks: $(item).find('.label').text() || ''
             });
         });
@@ -425,6 +459,7 @@ async function category(params) {
  */
 async function detail(params) {
     const videoId = params.videoId;
+    const baseURL = params?.context?.baseURL || params?.baseURL || "";
     logInfo(`请求详情 ID: ${videoId}`);
     
     try {
@@ -576,7 +611,7 @@ async function detail(params) {
             list: [{
                 vod_id: videoId,
                 vod_name: scrapeData?.title || title,
-                vod_pic: scrapeData?.posterPath ? `https://image.tmdb.org/t/p/w500${scrapeData.posterPath}` : fixImageUrl(coverSrc),
+                vod_pic: scrapeData?.posterPath ? fixImageUrl(`https://image.tmdb.org/t/p/w500${scrapeData.posterPath}`, baseURL) : fixImageUrl(coverSrc, baseURL),
                 vod_content: fixedRemarks,
                 vod_actor: (scrapeData?.credits?.cast || []).slice(0, 5).map((c) => c?.name).filter(Boolean).join(',') || actor,
                 vod_director: (scrapeData?.credits?.crew || []).filter((c) => c?.job === 'Director' || c?.department === 'Directing').slice(0, 3).map((c) => c?.name).filter(Boolean).join(',') || director,
@@ -596,6 +631,7 @@ async function detail(params) {
 async function search(params) {
     const wd = params.keyword || params.wd || "";
     const pg = parseInt(params.page) || 1;
+    const baseURL = params?.context?.baseURL || params?.baseURL || "";
     
     logInfo(`搜索关键词: ${wd}, 页码: ${pg}`);
     
@@ -622,7 +658,7 @@ async function search(params) {
             allResults.push({
                 vod_id: a.attr('href'),
                 vod_name: title,
-                vod_pic: fixImageUrl(imgSrc),
+                vod_pic: fixImageUrl(imgSrc, baseURL),
                 vod_remarks: remarks || '',
                 originalTitle: title
             });
@@ -722,11 +758,35 @@ async function play(params) {
         logInfo(`读取刮削元数据失败: ${e.message}`);
     }
     
-    // iKanBot 直接返回播放地址
+    // iKanBot 播放地址处理，支持嗅探
+    let playUrl = playId;
+    if (playUrl && !playUrl.startsWith('http')) {
+        playUrl = playUrl.startsWith('/') ? ikanbotConfig.host + playUrl : ikanbotConfig.host + '/' + playUrl;
+    }
+
+    const isDirectPlayable = playUrl && playUrl.match(/\.(m3u8|mp4|flv|avi|mkv|ts)/i);
+    let finalUrl = playUrl;
+    let finalHeader = { ...ikanbotConfig.headers, Referer: ikanbotConfig.host };
+
+    if (!isDirectPlayable && playUrl) {
+        try {
+            const sniffResult = await OmniBox.sniffVideo(playUrl);
+            if (sniffResult && sniffResult.url) {
+                finalUrl = sniffResult.url;
+                finalHeader = sniffResult.header || finalHeader;
+                logInfo("嗅探成功", { url: finalUrl });
+            } else {
+                logInfo("嗅探未返回有效地址");
+            }
+        } catch (e) {
+            logInfo(`嗅探失败: ${e.message}`);
+        }
+    }
+
     const playResponse = {
-        urls: [{ name: "默认", url: playId }],
+        urls: [{ name: "默认", url: finalUrl }],
         parse: 0,
-        header: ikanbotConfig.headers
+        header: finalHeader
     };
 
     if (DANMU_API && vodName) {
