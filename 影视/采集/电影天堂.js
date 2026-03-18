@@ -1,7 +1,7 @@
 // @name 电影天堂
 // @author 
 // @description 刮削：支持，弹幕：支持，嗅探：支持
-// @version 1.0.3
+// @version 1.0.4
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/电影天堂.js
 const OmniBox = require("omnibox_sdk");
 
@@ -14,62 +14,158 @@ const SITE_API = process.env.SITE_API || "https://caiji.dyttzyapi.com/api.php/pr
 // 如果为空，则不启用弹幕功能
 const DANMU_API = process.env.DANMU_API || "";
 
-// ==================== 自定义分类与屏蔽配置 ====================
-// 屏蔽的分类名称关键词
-const EXCLUDE_CLASS_NAMES = ["伦理片", "海外动漫", "港台动漫", "港台综艺"];
+// EXCLUDE_CLASS_NAMES 环境变量（分类屏蔽关键词）
+// 支持 3 种写法：
+// 1) JSON 数组（推荐）：["伦理片","情色"]
+// 2) 逗号分隔：伦理片,情色
+// 3) 竖线分隔：伦理片|情色
+// 行为说明：
+// - 未设置该环境变量：使用 DEFAULT_EXCLUDE_CLASS_NAMES
+// - 显式设置为空字符串：不屏蔽任何分类（返回 []）
+const EXCLUDE_CLASS_NAMES_ENV = process.env.EXCLUDE_CLASS_NAMES || "伦理片";
+// ==================== 配置区域结束 ====================
+
+function parseExcludeClassNamesFromEnv() {
+    const raw = EXCLUDE_CLASS_NAMES_ENV;
+
+    const text = raw.trim();
+    // 环境变量显式留空时，表示不屏蔽任何分类
+    if (!text) {
+        return [];
+    }
+
+    let values = [];
+
+    // 优先支持 JSON 数组格式: ["伦理片","其他"]
+    if (text.startsWith("[") && text.endsWith("]")) {
+        try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) {
+                values = parsed;
+            }
+        } catch (error) {
+            OmniBox.log("warn", `EXCLUDE_CLASS_NAMES 环境变量 JSON 解析失败: ${error.message}`);
+        }
+    }
+
+    // 兼容逗号/竖线分隔格式: 伦理片,情色片 或 伦理片|情色片
+    if (values.length === 0) {
+        values = text.split(/[,，|]/g);
+    }
+
+    const normalized = Array.from(
+        new Set(
+            values
+                .map((item) => String(item || "").trim())
+                .filter(Boolean)
+        )
+    );
+
+    return normalized;
+}
+
+const EXCLUDE_CLASS_NAMES = parseExcludeClassNamesFromEnv();
+
+function shouldExcludeClassName(name) {
+    const className = String(name || "").trim();
+    if (!className || EXCLUDE_CLASS_NAMES.length === 0) {
+        return false;
+    }
+    return EXCLUDE_CLASS_NAMES.some((keyword) => className.includes(keyword));
+}
+
+function getEffectiveCategoryGroup(group) {
+    const allIds = Array.isArray(group?.allIds) ? group.allIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+    const types = Array.isArray(group?.types) ? group.types : [];
+
+    if (types.length === 0) {
+        return {
+            ...group,
+            allIds,
+            types,
+        };
+    }
+
+    const excludedTypeIds = new Set();
+    const filteredTypes = types.filter((item) => {
+        if (!item || typeof item !== "object") {
+            return false;
+        }
+        const value = String(item.value || "").trim();
+        const name = String(item.name || "").trim();
+        if (value && value !== "all" && shouldExcludeClassName(name)) {
+            excludedTypeIds.add(value);
+            return false;
+        }
+        return true;
+    });
+
+    const filteredAllIds = allIds.filter((id) => !excludedTypeIds.has(id));
+
+    return {
+        ...group,
+        allIds: filteredAllIds,
+        types: filteredTypes,
+    };
+}
 
 // 自定义分类配置
 // 格式: { "顶层分类ID": { name: "显示名称", allIds: ["子分类ID1", "子分类ID2", ...], types: [筛选项] } }
 const CATEGORY_CONFIG = {
     "1": {
         name: "电影",
-        allIds: ["11", "6", "7", "8", "9", "10", "12", "20", "37"],
+        allIds: ["6", "7", "8", "9", "10", "11", "12", "20", "37", "34"],
         types: [
-            { n: "全部", v: "all" },
-            { n: "剧情片", v: "11" },
-            { n: "动作片", v: "6" },
-            { n: "喜剧片", v: "7" },
-            { n: "爱情片", v: "8" },
-            { n: "科幻片", v: "9" },
-            { n: "恐怖片", v: "10" },
-            { n: "战争片", v: "12" },
-            { n: "记录片", v: "20" },
-            { n: "动画片", v: "37" },
+            { name: "全部", value: "all" },
+            { name: "动作片", value: "6" },
+            { name: "喜剧片", value: "7" },
+            { name: "爱情片", value: "8" },
+            { name: "科幻片", value: "9" },
+            { name: "恐怖片", value: "10" },
+            { name: "剧情片", value: "11" },
+            { name: "战争片", value: "12" },
+            { name: "记录片", value: "20" },
+            { name: "动画片", value: "37" },
+            { name: "伦理片", value: "34" },
         ],
     },
     "2": {
         name: "电视剧",
         allIds: ["13", "16", "15", "22", "24", "14", "21", "23"],
         types: [
-            { n: "全部", v: "all" },
-            { n: "国产剧", v: "13" },
-            { n: "欧美剧", v: "16" },
-            { n: "韩剧", v: "15" },
-            { n: "日剧", v: "22" },
-            { n: "泰剧", v: "24" },
-            { n: "港剧", v: "14" },
-            { n: "台剧", v: "21" },
-            { n: "海外剧", v: "23" },
+            { name: "全部", value: "all" },
+            { name: "国产剧", value: "13" },
+            { name: "欧美剧", value: "16" },
+            { name: "韩剧", value: "15" },
+            { name: "日剧", value: "22" },
+            { name: "泰剧", value: "24" },
+            { name: "港剧", value: "14" },
+            { name: "台剧", value: "21" },
+            { name: "海外剧", value: "23" },
         ],
     },
     "3": {
         name: "动漫",
-        allIds: ["29", "30", "31"],
+        allIds: ["29", "30", "31", "32", "33"],
         types: [
-            { n: "全部", v: "all" },
-            { n: "国产动漫", v: "29" },
-            { n: "日韩动漫", v: "30" },
-            { n: "欧美动漫", v: "31" },
+            { name: "全部", value: "all" },
+            { name: "国产动漫", value: "29" },
+            { name: "日韩动漫", value: "30" },
+            { name: "欧美动漫", value: "31" },
+            { name: "欧美动漫", value: "31" },
+            { name: "港台动漫", value: "32" },
+            { name: "海外动漫", value: "33" },
         ],
     },
     "4": {
         name: "综艺",
-        allIds: ["25", "27", "28"],
+        allIds: ["25", "26", "27", "28"],
         types: [
-            { n: "全部", v: "all" },
-            { n: "大陆综艺", v: "25" },
-            { n: "日韩综艺", v: "27" },
-            { n: "欧美综艺", v: "28" },
+            { name: "全部", value: "all" },
+            { name: "大陆综艺", value: "25" },
+            { name: "港台综艺", value: "26" },
+            { name: "日韩综艺", value: "27" },
+            { name: "欧美综艺", value: "28" },
         ],
     },
     "5": {
@@ -78,6 +174,76 @@ const CATEGORY_CONFIG = {
         types: [],
     },
 };
+
+function buildHomeFiltersFromCategoryConfig() {
+    const filters = {};
+    for (const [typeId, config] of Object.entries(CATEGORY_CONFIG)) {
+        const effectiveGroup = getEffectiveCategoryGroup(config);
+        const types = Array.isArray(effectiveGroup?.types) ? effectiveGroup.types : [];
+        if (types.length === 0) {
+            continue;
+        }
+        const values = types
+            .map((item) => {
+                if (!item || typeof item !== "object") {
+                    return null;
+                }
+                const name = String(item.name || "").trim();
+                const value = String(item.value || "").trim();
+                if (!name && !value) {
+                    return null;
+                }
+                return {
+                    name: name || value,
+                    value: value,
+                };
+            })
+            .filter(Boolean);
+
+        if (values.length > 0) {
+            filters[typeId] = [
+                {
+                    key: "cate",
+                    name: "类型",
+                    init: "all",
+                    value: values,
+                },
+            ];
+        }
+    }
+    return filters;
+}
+
+function parseCategoryFilterParams(params = {}) {
+    const result = {};
+
+    if (params.filters && typeof params.filters === "object") {
+        Object.assign(result, params.filters);
+    } else if (typeof params.filters === "string" && params.filters.trim()) {
+        try {
+            const parsed = JSON.parse(params.filters);
+            if (parsed && typeof parsed === "object") {
+                Object.assign(result, parsed);
+            }
+        } catch (error) {
+            OmniBox.log("warn", `解析 filters 参数失败: ${error.message}`);
+        }
+    }
+
+    if (params.extend) {
+        try {
+            const decodedStr = Buffer.from(String(params.extend), "base64").toString("utf-8");
+            const extObj = JSON.parse(decodedStr);
+            if (extObj && typeof extObj === "object") {
+                Object.assign(result, extObj);
+            }
+        } catch (error) {
+            OmniBox.log("warn", `解析 extend 参数失败: ${error.message}`);
+        }
+    }
+
+    return result;
+}
 
 // 全局参数
 const PAGE_LIMIT = 20; // 每页数量
@@ -232,7 +398,7 @@ function convertToPlaySources(vodPlayFrom, vodPlayUrl, vodId, detailVodName = ""
                     if (episodeName && playId) {
                         episodes.push({
                             name: episodeName,
-                            playId: `${playId}|||${encodeMeta({ v: detailVodName, e: episodeName, sid: vodId, fid: fid })}`,
+                            playId: `${playId}|||${encodeMeta({ value: detailVodName, e: episodeName, sid: vodId, fid: fid })}`,
                             _fid: fid,
                             _rawName: episodeName,
                         });
@@ -241,7 +407,7 @@ function convertToPlaySources(vodPlayFrom, vodPlayUrl, vodId, detailVodName = ""
                     const episodeName = `第${episodes.length + 1}集`;
                     episodes.push({
                         name: episodeName,
-                        playId: `${parts[0].trim()}|||${encodeMeta({ v: detailVodName, e: episodeName, sid: vodId, fid: fid })}`,
+                        playId: `${parts[0].trim()}|||${encodeMeta({ value: detailVodName, e: episodeName, sid: vodId, fid: fid })}`,
                         _fid: fid,
                         _rawName: episodeName,
                     });
@@ -545,9 +711,7 @@ async function fetchAllMerged(group, page) {
     const filtered = raw.filter(
         (item) =>
             item &&
-            !EXCLUDE_CLASS_NAMES.some((keyword) =>
-                (item.type_name || "").includes(keyword)
-            )
+            !shouldExcludeClassName(item.type_name)
     );
 
     // 按时间倒序排序
@@ -598,13 +762,15 @@ async function home(params) {
             limit: 100,
         });
         const videos = formatVideos(response.list || []);
+        const filters = buildHomeFiltersFromCategoryConfig();
         return {
             class: classes,
             list: videos,
+            filters: filters,
         };
     } catch (error) {
         OmniBox.log("error", `获取首页数据失败: ${error.message}`);
-        return { class: [], list: [] };
+        return { class: [], list: [], filters: {} };
     }
 }
 
@@ -621,7 +787,6 @@ async function category(params) {
     try {
         const categoryId = params.categoryId;
         const page = toInt(params.page) || 1;
-        const extendParam = params.extend; // OmniBox 传递的筛选参数通常是 Base64 编码的 JSON
 
         if (!categoryId) {
             throw new Error("分类ID不能为空");
@@ -645,22 +810,13 @@ async function category(params) {
             };
         }
 
+        const effectiveGroup = getEffectiveCategoryGroup(group);
+
         OmniBox.log("info", `获取自定义分类数据: categoryId=${categoryId}, page=${page}`);
 
-        // 解析 extend 参数
-        let extObj = {};
-        if (extendParam) {
-            try {
-                // OmniBox 的 extend 参数是 Base64 编码的
-                const decodedStr = Buffer.from(extendParam, 'base64').toString('utf-8');
-                extObj = JSON.parse(decodedStr);
-            } catch (e) {
-                OmniBox.log("warn", `解析 extend 参数失败: ${e.message}`);
-            }
-        }
-
-        const selectedSubType = extObj.cate || extObj.class; // "cate" or "class" depends on your filter key
-        if (selectedSubType && selectedSubType !== "all") {
+        const extObj = parseCategoryFilterParams(params);
+        const selectedSubType = String(extObj.cate || extObj.class || "").trim();
+        if (selectedSubType && selectedSubType !== "all" && effectiveGroup.allIds.includes(selectedSubType)) {
             // 如果有子分类筛选，直接请求该子分类
             const response = await requestSiteAPI({
                 ac: "videolist",
@@ -676,7 +832,7 @@ async function category(params) {
             };
         } else {
             // 否则，合并所有子分类数据
-            return await fetchAllMerged(group, page);
+            return await fetchAllMerged(effectiveGroup, page);
         }
     } catch (error) {
         OmniBox.log("error", `获取分类数据失败: ${error.message}`);
