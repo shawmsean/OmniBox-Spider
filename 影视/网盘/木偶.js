@@ -1,8 +1,8 @@
 // @name 木偶
-// @author 
+// @author
 // @description 刮削：支持，弹幕：支持，嗅探：支持
 // @dependencies: axios, cheerio
-// @version 1.0.6
+// @version 1.0.7
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/网盘/木偶.js
 
 // 引入 OmniBox SDK
@@ -23,7 +23,7 @@ try {
 const https = require("https");
 const fs = require("fs");
 
-// ==================== 配置区域 ==================== 
+// ==================== 配置区域 ====================
 // 网站地址(可以通过环境变量配置,支持多个域名用;分割)
 const WEB_SITE_CONFIG = process.env.WEB_SITE_MUOU || "https://www.muou.site;https://www.muou.asia;https://666.666291.xyz;";
 const WEB_SITES = WEB_SITE_CONFIG.split(';').map(url => url.trim()).filter(url => url);
@@ -739,7 +739,7 @@ async function detail(params, context) {
 
           const videoFilesForScraping = allVideoFiles.map((file) => {
             const fileId = file.fid || file.file_id || "";
-            const formattedFileId = fileId ? `${shareURL}|${fileId}` : fileId;
+            const formattedFileId = fileId ? `${shareURL}|${fileId}|${videoId}` : fileId;
             return {
               ...file,
               fid: formattedFileId,
@@ -749,7 +749,7 @@ async function detail(params, context) {
 
           OmniBox.log("info", `文件ID格式转换完成,示例: ${videoFilesForScraping[0]?.fid || "N/A"}`);
 
-          const scrapingResult = await OmniBox.processDriveScraping(shareURL, vodName, vodName, videoFilesForScraping);
+          const scrapingResult = await OmniBox.processScraping(videoId, vodName, vodName, videoFilesForScraping);
           OmniBox.log("info", `刮削处理完成,结果: ${JSON.stringify(scrapingResult).substring(0, 200)}`);
           scrapingSuccess = true;
         } catch (error) {
@@ -766,7 +766,7 @@ async function detail(params, context) {
 
         try {
           OmniBox.log("info", `开始获取元数据,videoId: ${params.videoId}`);
-          const metadata = await OmniBox.getDriveMetadata(shareURL);
+          const metadata = await OmniBox.getDriveMetadata(videoId);
           OmniBox.log("info", `获取元数据响应: ${JSON.stringify(metadata).substring(0, 500)}`);
 
           scrapeData = metadata.scrapeData || null;
@@ -863,7 +863,7 @@ async function detail(params, context) {
 
           const episode = {
             name: displayFileName,
-            playId: `${shareURL}|${fileId}`,
+            playId: `${shareURL}|${fileId}|${videoId}`,
             size: fileSize > 0 ? fileSize : undefined,
           };
 
@@ -1096,6 +1096,7 @@ async function play(params, context) {
     }
     const shareURL = parts[0] || "";
     const fileId = parts[1] || "";
+    OmniBox.log("info", `获取到的参数${playId}`);
     const videoId = parts[2] || "";
 
     if (!shareURL || !fileId) {
@@ -1111,10 +1112,10 @@ async function play(params, context) {
     let episodeName = params.episodeName || "";
 
     try {
-      let metadata = await OmniBox.getDriveMetadata(shareURL);
+      let metadata = await OmniBox.getDriveMetadata(videoId);
 
       if (metadata && metadata.scrapeData && metadata.videoMappings) {
-        const formattedFileId = fileId ? `${shareURL}|${fileId}` : "";
+        const formattedFileId = fileId ? `${shareURL}|${fileId}|${videoId}` : "";
 
         let matchedMapping = null;
         for (const mapping of metadata.videoMappings) {
@@ -1184,9 +1185,8 @@ async function play(params, context) {
       if (sourceId) {
         const title = params.title || scrapeTitle || shareURL;
         const pic = params.pic || scrapePic || "";
-
         const added = await OmniBox.addPlayHistory({
-          vodId: vodId,
+          vodId: videoId,
           title: title,
           pic: pic,
           episode: playId,
