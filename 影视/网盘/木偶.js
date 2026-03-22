@@ -2,7 +2,7 @@
 // @author
 // @description 刮削：支持，弹幕：支持，嗅探：支持
 // @dependencies: axios, cheerio
-// @version 1.1.0
+// @version 1.1.1
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/网盘/木偶.js
 
 // 引入 OmniBox SDK
@@ -766,7 +766,7 @@ async function detail(params, context) {
 
         try {
           OmniBox.log("info", `开始获取元数据,videoId: ${params.videoId}`);
-          const metadata = await OmniBox.getDriveMetadata(videoId);
+          const metadata = await OmniBox.getScrapeMetadata(videoId);
           OmniBox.log("info", `获取元数据响应: ${JSON.stringify(metadata).substring(0, 500)}`);
 
           scrapeData = metadata.scrapeData || null;
@@ -1112,7 +1112,7 @@ async function play(params, context) {
     let episodeName = params.episodeName || "";
 
     try {
-      let metadata = await OmniBox.getDriveMetadata(videoId);
+      let metadata = await OmniBox.getScrapeMetadata(videoId);
 
       if (metadata && metadata.scrapeData && metadata.videoMappings) {
         const formattedFileId = fileId ? `${shareURL}|${fileId}|${videoId}` : "";
