@@ -13,7 +13,7 @@ const https = require("https");
 const http = require("http");
 
 const BASE_URL = "https://www.cupfox.ai";
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3.1 Mobile/15E148 Safari/604.1";
 const LIST_CACHE_TTL = Number(process.env.CUPFOX_LIST_CACHE_TTL || 900);
 const DETAIL_CACHE_TTL = Number(process.env.CUPFOX_DETAIL_CACHE_TTL || 1800);
 const SEARCH_CACHE_TTL = Number(process.env.CUPFOX_SEARCH_CACHE_TTL || 600);
@@ -226,7 +226,34 @@ function normalizeText(value) {
 }
 
 function stripHtml(value) {
-  return normalizeText(String(value || "").replace(/<[^>]+>/g, " "));
+  return normalizeText(String(value || "").replace(/&nbsp;/gi, " ").replace(/<br\s*\/?>(?=\s*)/gi, " ").replace(/<[^>]+>/g, " "));
+}
+
+function cleanDisplayText(value) {
+  return normalizeText(
+    decodeMaybeGarbled(
+      String(value || "")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&#160;/gi, " ")
+        .replace(/<br\s*\/?>(?=\s*)/gi, " ")
+        .replace(/<[^>]+>/g, " "),
+    ),
+  );
+}
+
+function formatPeopleText(value) {
+  const text = cleanDisplayText(value);
+  if (!text) return "";
+  if (/[\/、，,|]/.test(text)) {
+    return text
+      .split(/[\/、，,|]+/)
+      .map((item) => normalizeText(item))
+      .filter(Boolean)
+      .join(" / ");
+  }
+  const parts = text.split(/\s+/).map((item) => item.trim()).filter(Boolean);
+  if (parts.length <= 1) return text;
+  return parts.join(" / ");
 }
 
 function decodeMaybeGarbled(text) {
@@ -404,20 +431,20 @@ function parseSearchList(htmlText) {
 
 function parseDetail(htmlText, detailUrl) {
   const $ = cheerio.load(htmlText);
-  const title = decodeMaybeGarbled(normalizeText($("h1.movie-title").first().text()));
+  const title = cleanDisplayText($("h1.movie-title").first().text());
   const pic = absoluteUrl($(".poster img").first().attr("src") || "");
-  const content = decodeMaybeGarbled(normalizeText($(".summary.detailsTxt").first().text()));
-  const typeTags = $(".scroll-content a").toArray().map((el) => decodeMaybeGarbled(normalizeText($(el).text()))).filter(Boolean);
+  const content = cleanDisplayText($(".summary.detailsTxt").first().html() || $(".summary.detailsTxt").first().text());
+  const typeTags = $(".scroll-content a").toArray().map((el) => cleanDisplayText($(el).text())).filter(Boolean);
   const infoData = {};
   $(".info-data").each((_, el) => {
-    const text = decodeMaybeGarbled(stripHtml($(el).html() || $(el).text()));
-    const match = text.match(/^([^：]+)：\s*(.*)$/);
-    if (match) infoData[match[1]] = match[2];
+    const text = cleanDisplayText($(el).html() || $(el).text());
+    const match = text.match(/^([^：:]+)[：:]\s*(.*)$/);
+    if (match) infoData[match[1].trim()] = cleanDisplayText(match[2]);
   });
 
   const tabs = [];
   $(".play_source_tab .titleName").each((_, el) => {
-    const name = decodeMaybeGarbled(normalizeText($(el).contents().first().text() || $(el).text())).replace(/\s+/g, " ").trim();
+    const name = cleanDisplayText($(el).contents().first().text() || $(el).text()).replace(/\s+/g, " ").trim();
     tabs.push(name || `线路${tabs.length + 1}`);
   });
 
@@ -427,7 +454,7 @@ function parseDetail(htmlText, detailUrl) {
     const episodes = [];
     $(box).find("a.btn[href]").each((__, a) => {
       const href = $(a).attr("href") || "";
-      const name = decodeMaybeGarbled(normalizeText($(a).text()));
+      const name = cleanDisplayText($(a).text());
       if (!href || !name) return;
       episodes.push({ name, playId: absoluteUrl(href) });
     });
@@ -440,9 +467,9 @@ function parseDetail(htmlText, detailUrl) {
       vod_name: title,
       vod_pic: pic,
       type_name: typeTags.join(" / "),
-      vod_remarks: infoData["状态"] || "",
-      vod_actor: infoData["演员"] || "",
-      vod_director: infoData["导演"] || "",
+      vod_remarks: cleanDisplayText(infoData["状态"] || ""),
+      vod_actor: formatPeopleText(infoData["演员"] || ""),
+      vod_director: formatPeopleText(infoData["导演"] || ""),
       vod_content: content,
       vod_play_sources: playSources,
     }],
@@ -552,7 +579,7 @@ async function play(params = {}) {
       const muiplayerUrl = `${BASE_URL}/foxplay/muiplayer.php?vid=${encodeURIComponent(vid)}`;
       const apiBody = new URLSearchParams({ vid }).toString();
       await OmniBox.log("info", `[茶杯狐][play] foxplay request body=${apiBody}`);
-      const apiRaw = await requestTextNative(`${BASE_URL}/foxplay/api.php`, {
+      const apiRes = await requestTextNative(`${BASE_URL}/foxplay/api.php`, {
         method: "POST",
         headers: {
           "User-Agent": UA,
@@ -565,7 +592,8 @@ async function play(params = {}) {
         body: apiBody,
       });
 
-      await OmniBox.log("info", `[茶杯狐][play] api raw=${String(apiRaw || "").slice(0, 1200)}`);
+      const apiRaw = String(apiRes?.body || "");
+      await OmniBox.log("info", `[茶杯狐][play] api raw=${apiRaw.slice(0, 1200)}`);
 
       let apiJson = null;
       try {
@@ -610,7 +638,7 @@ async function play(params = {}) {
         }
         await OmniBox.log("warn", `[茶杯狐][play] api decode invalid code=${apiJson.code} mode=${apiJson.data.urlmode || 0} type=${apiJson.data.type || ""} url=${String(decodedUrl || "").slice(0, 200)} raw=${String(apiJson.data.url || "").slice(0, 200)}`);
       } else {
-        await OmniBox.log("warn", `[茶杯狐][play] api unexpected response=${String(apiRaw || "").slice(0, 1200)}`);
+        await OmniBox.log("warn", `[茶杯狐][play] api unexpected response=${apiRaw.slice(0, 1200)}`);
       }
       await OmniBox.log("warn", `[茶杯狐][play] foxplay api returned no direct url, fallback sniff vid=${vid}`);
     } else {
